@@ -1,0 +1,7 @@
+streamlit
+pandas
+numpy
+altair
+azure-storage-blob
+openpyxl
+xlsxwriter
