@@ -5,34 +5,35 @@ import streamlit as st
 import datetime as dt
 import altair as alt
 import io
-import os
+from azure.storage.blob import BlobServiceClient
 
 # ========================= #
-#  LOCAL FILE STORAGE SETUP #
+#  AZURE BLOB STORAGE SETUP #
 # ========================= #
 
-LOCAL_FILE_PATH = "bi_office_hours.xlsx"
+sas_url = st.secrets.blob_credentials.sas_url  # Only the full SAS URL is needed
+container_name = "bicollections"
+blob_file_name = "fulfillment/bi_office_hours.xlsx"
 
-def read_local_file(file_name):
-    """Reads an Excel file from local storage."""
-    if os.path.exists(file_name):
-        return file_name
-    else:
-        return None  # Return None if file doesn't exist
+blob_service_client = BlobServiceClient(account_url=sas_url)
+container_client = blob_service_client.get_container_client(container=container_name)
 
-def save_local_file(tuples_list, file_name):
-    """Saves an Excel file locally."""
-    file_data = prepare_xlsx(tuples_list)
-    with open(file_name, "wb") as f:
-        f.write(file_data)
+def read_from_blob_storage(file_name):
+    blob_client = container_client.get_blob_client(blob=file_name)
+    downloaded_blob = blob_client.download_blob().readall()
+    return downloaded_blob
 
 def prepare_xlsx(tuples_list):
-    """Creates an Excel file in memory from a list of DataFrames."""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         for df, sheet_name in tuples_list:
             df.to_excel(writer, sheet_name=sheet_name, index=False)
     return output.getvalue()
+
+def upload_to_blob_storage(tuples_list, file_name):
+    file_data = prepare_xlsx(tuples_list)
+    blob_client = container_client.get_blob_client(blob=file_name)
+    blob_client.upload_blob(file_data, overwrite=True)
 
 # ===================== #
 #  STREAMLIT FUNCTIONS  #
@@ -40,19 +41,14 @@ def prepare_xlsx(tuples_list):
 
 @st.cache_data
 def get_data():
-    """Loads participants data from a local Excel file."""
-    local_data = read_local_file(LOCAL_FILE_PATH)
-    if local_data:
-        participants_df = pd.read_excel(local_data, sheet_name="participants")
-        session_df = pd.read_excel(local_data, sheet_name="session_history")
-    else:
-        participants_df = pd.DataFrame(columns=["participant", "is_active"])
-        session_df = pd.DataFrame(columns=["date", "participant_1", "participant_2"])
+    """Loads participants data from an Azure Blob Excel file."""
+    blob_file = read_from_blob_storage(blob_file_name)
+    participants_df = pd.read_excel(blob_file, sheet_name="participants")
+    session_df = pd.read_excel(blob_file, sheet_name="session_history")
     session_df["date"] = pd.to_datetime(session_df["date"], format="%Y-%m-%d").dt.date
     return participants_df, session_df
 
 def get_next_friday(today):
-    """Calculates the next biweekly Friday."""
     days_until_next_friday = (4 - today.weekday()) % 7
     next_friday = today + dt.timedelta(days=days_until_next_friday)
     if (next_friday - dt.date(2024, 1, 5)).days % 14 != 0:
@@ -75,6 +71,7 @@ def add_participants_entry(df, next_participants, next_date):
 
 st.set_page_config(page_title="BI Office Hours Participants", page_icon="📊", layout="wide")
 
+
 participants_df, session_df = get_data()
 
 today = dt.date.today()
@@ -82,11 +79,11 @@ next_friday_default = get_next_friday(today)
 
 selectbox_page = st.selectbox(
     "",
-    ["📅 Assign Participants", "📜 Session History", "➕ Add Participants"],
+    ["🗕 Assign Participants", "📜 Session History", "➕ Add Participants"],
     label_visibility="collapsed",
 )
 
-if selectbox_page == "📅 Assign Participants":
+if selectbox_page == "🗕 Assign Participants":
     participants = participants_df["participant"][participants_df["is_active"] == True].tolist()
     available_team = st.multiselect("Who is available to participate?", participants, participants)
     next_date = st.date_input("Next Office Hours Date", next_friday_default)
@@ -103,19 +100,16 @@ if selectbox_page == "📅 Assign Participants":
             )
             if st.checkbox("Save Results", True):
                 session_df = add_participants_entry(session_df, next_participants, next_date)
-                save_local_file([(participants_df, "participants"), (session_df, "session_history")], LOCAL_FILE_PATH)
+                upload_to_blob_storage([(participants_df, "participants"), (session_df, "session_history")], blob_file_name)
             st.success(f"Next Office Hours Participants: {next_participants[0]} & {next_participants[1]}")
 
-    # Display session history
     st.markdown("## Assignment History 📜")
-    
+
     if session_df.empty:
         st.write("No sessions recorded yet.")
     else:
-        # Table View
         st.table(session_df.sort_values("date", ascending=False))
 
-        # Chart View
         st.markdown("### Participation Frequency 📊")
         melted_df = session_df.melt(id_vars=["date"], value_vars=["participant_1", "participant_2"], var_name="Role", value_name="Participant")
         frequency_df = melted_df.groupby("Participant", as_index=False).size().rename(columns={"size": "count"})
@@ -164,6 +158,6 @@ elif selectbox_page == "➕ Add Participants":
             columns={"Participant": "participant", "isActive": "is_active"}
         )
         participants_df.sort_values("participant", inplace=True, ignore_index=True)
-        save_local_file([(participants_df, "participants"), (session_df, "session_history")], LOCAL_FILE_PATH)
+        upload_to_blob_storage([(participants_df, "participants"), (session_df, "session_history")], blob_file_name)
         st.success("Participants have been saved!")
         st.cache_data.clear()
