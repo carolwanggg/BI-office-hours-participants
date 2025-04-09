@@ -1,7 +1,7 @@
-streamlit
-pandas
-numpy
-altair
-azure-storage-blob>=12.10.0
+streamlit==1.44.1
+pandas==2.2.3
+azure-storage-blob
+altair==5.5.0
 openpyxl
 xlsxwriter
+
