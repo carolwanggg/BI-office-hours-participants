@@ -2,6 +2,6 @@ streamlit
 pandas
 numpy
 altair
-azure-storage-blob
+azure-storage-blob>=12.10.0
 openpyxl
 xlsxwriter
